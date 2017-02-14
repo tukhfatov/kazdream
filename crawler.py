@@ -1,9 +1,49 @@
+# -*- coding: utf-8 -*-
 import bs4
 import execjs
 import requests
+import sqlite3
+import time
 
+DB_PATH = "kazdream_api/md_kazdream_db.sqlite3"
 
-last_id = 132521 # last page id
+class My_DB(object):
+
+	def __init__(self, path):
+		super(My_DB, self).__init__()
+		self.path = path
+
+	def __connect(self):
+		try:
+			return sqlite3.connect(self.path)
+		except Exception:
+			print('ERROR in database. Informing developer...')
+		return None
+
+	def get_last_page(self):
+		db = self.__connect()
+		if db:
+			cursor = db.cursor()
+			cursor.execute('''SELECT MAX(page) FROM md_vacancy''')
+			last = cursor.fetchone()
+			db.close()
+			if last[0]:
+				return last[0]
+			else:
+				# get latest 10 job descriptions
+				return 132520
+		return None
+
+	# able to encapsulate into object Vacancy, will do later
+	def insert_new_vacancy(self, page, employer, contact_person, telephone, email, title, city, salary, working_place, working_hours, condition, responsibility, education, experience, requirements):
+
+		db = self.__connect()
+		if db:
+			cursor = db.cursor()
+
+			cursor.execute('''INSERT INTO md_vacancy(page, employer, contact_person, telephone, email, title, city, salary, working_place, working_hours, condition, responsibility, education, experience, requirements) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (page, employer, contact_person, telephone, email, title, city, salary, working_place, working_hours, condition, responsibility, education, experience, requirements))
+			return db.commit()
+
 
 class Page(object):
 
@@ -11,19 +51,23 @@ class Page(object):
 	EXTENSION = '.html'
 	CONTACTS_URL = 'http://joblab.kz/shared/ajax_contacts.php'
 
-	def __init__(self, last_id):
+	def __init__(self, db):
 		super(Page, self).__init__()
-		self.last_id = last_id
-	
+		self.db = db
+		self.last_page_id = self.db.get_last_page()
+
 	def get_last_page(self):
-		self.last_id = self.last_id+1
-		return self.BASE_URL+str(self.last_id)+self.EXTENSION
+		self.last_page_id = self.last_page_id+1
+		return self.BASE_URL+str(self.last_page_id)+self.EXTENSION
 
 	def get_email(self,c):
 		r = requests.post(self.CONTACTS_URL, data={'c':c, 't':'p'})
 
 		if r.status_code == requests.codes.OK:
 			return r.text
+		return "TBA"
+
+	def get_telephone(self,c):
 		return "TBA"
 
 	def parse_page(self, html_data):
@@ -39,6 +83,8 @@ class Page(object):
 		education=''
 		experience=''
 		requirements=''
+		telephone=''
+		email=''
 
 		title = data.h1.string
 		table = data.find('table', attrs={'class':'table-to-div'})
@@ -52,7 +98,7 @@ class Page(object):
 				if query == 'Контактное лицо':
 					contact_person = execjs.eval(cells[1].p.string[14:len(cells[1].p.string)-1])
 				if query == 'Телефон':
-					print('telephone')
+					telephone=self.get_telephone('')
 				if query == 'E-mail':
 					emailstr= data.find_all(string=lambda text:isinstance(text,bs4.Comment))[-1]
 					email = self.get_email("m"+emailstr.split()[2][8:-10])
@@ -75,12 +121,20 @@ class Page(object):
 				if query == 'Требования':
 					requirements = cells[1].p.text
 
+		self.db.insert_new_vacancy(self.last_page_id, employer, contact_person, telephone, email, title, city, salary, working_place, working_hours, condition, responsibility, education, experience, requirements)
+
+		print("Inserted %d"%self.last_page_id)
+
+
 
 # main
-page = Page(last_id)
+db = My_DB(DB_PATH)
+page = Page(db)
 req = requests.get(page.get_last_page())
 
 while req.status_code != requests.codes.NOT_FOUND:
-	page.parse_page(req.text)
-	print("###################################################")
+	try:
+		page.parse_page(req.text)
+	except Exception as e:
+		print('ERROR in page %d. Informing developer...'%page.last_page_id)
 	req = requests.get(page.get_last_page())
